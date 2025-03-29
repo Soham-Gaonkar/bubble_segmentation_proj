@@ -1,0 +1,12 @@
+__pycache__/
+*.ckpt
+*.log
+logs/
+.env
+venv/
+
+
+Data/
+logs/
+checkpoints/
+.lightning_studio/
