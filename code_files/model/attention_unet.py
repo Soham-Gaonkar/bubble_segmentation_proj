@@ -18,6 +18,10 @@ class AttentionGate(nn.Module):
     def forward(self, x, g):
         g = self.W_g(g)
         x = self.W_x(x)
+
+        # Resize g to match the size of x
+        g = F.interpolate(g, size=x.size()[2:], mode='bilinear', align_corners=False)
+
         psi = self.relu(g + x)
         psi = self.sigmoid(self.psi(psi))
         return x * psi

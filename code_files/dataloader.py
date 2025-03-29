@@ -94,14 +94,12 @@ class Resize:
         label = label.resize(self.size, Image.NEAREST)  # Use NEAREST for masks
         return image, label
 
-
-class ToTensor:
-    """Convert PIL Images to tensors."""
+class PILToTensor:
+    """Convert PIL Images to tensors using torchvision.transforms.ToTensor."""
 
     def __call__(self, image, label):
-        image = torch.from_numpy(np.array(image)).permute(2, 0, 1).float() / 255.0
-        label = torch.from_numpy(np.array(label)).float() / 255.0
-        label = label.unsqueeze(0) # Add channel dimension
+        image = transforms.ToTensor()(image)
+        label = transforms.ToTensor()(label)
         return image, label
 
 
@@ -137,12 +135,12 @@ def create_ultrasound_dataloaders(image_dir, label_dir, batch_size=4, val_split=
     # Define separate transforms (applied to image and label after joint transforms)
     train_transform = JointTransform([
         Grayscale(), #Convert to Grayscale
-        ToTensor(),  # Convert to tensors
+        PILToTensor(),  # Convert to tensors
     ])
 
     val_transform = JointTransform([
         Grayscale(), #Convert to Grayscale
-        ToTensor(),  # Convert to tensors
+        PILToTensor(),  # Convert to tensors
     ])
 
 

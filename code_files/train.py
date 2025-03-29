@@ -43,6 +43,7 @@ def train_one_epoch(model, optimizer, criterion, train_loader, epoch, config, wr
         data, targets = data.to(config.DEVICE), targets.to(config.DEVICE)
 
         # Forward
+        print(data.shape)
         predictions = model(data)
         loss = criterion(predictions, targets)
 
