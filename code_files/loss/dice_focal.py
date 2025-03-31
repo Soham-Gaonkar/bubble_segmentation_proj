@@ -1,4 +1,3 @@
-# loss/dice_focal.py
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -12,6 +11,8 @@ class DiceFocalLoss(nn.Module):
         self.smooth = smooth
 
     def forward(self, inputs, targets):
+
+        inputs = torch.sigmoid(inputs)
         # Dice Loss
         intersection = (inputs * targets).sum(dim=(2, 3))
         union = inputs.sum(dim=(2, 3)) + targets.sum(dim=(2, 3))
