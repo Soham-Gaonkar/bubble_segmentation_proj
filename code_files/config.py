@@ -8,7 +8,10 @@ class Config:
     NUM_CLASSES = 1      # 1 for binary segmentation (output channel).
     # !! Crucial for ConvLSTM !! Set > 1 ONLY when using ConvLSTM.
     # DataLoader must be adapted to output (B, T, C, H, W) when > 1.
-    SEQUENCE_LENGTH = 1  # Number of temporal frames/pulses to stack.
+
+    IMAGE_DIR = "../Data/US_2"
+    LABEL_DIR = "../Data/Labels_2"
+
 
     # --- General Training Settings ---
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -18,7 +21,9 @@ class Config:
     WEIGHT_DECAY = 1e-5
 
     # --- Model Selection ---
-    MODEL_NAME = "ResNet18CNN" # Options: "ResNet18CNN", "AttentionUNet", "DeepLabV3Plus", "ConvLSTM"
+    MODEL_NAME = "ConvLSTM" # Options: "ResNet18CNN", "AttentionUNet", "DeepLabV3Plus", "ConvLSTM"
+    SEQUENCE_LENGTH = 3  # Number of temporal frames/pulses to stack.
+
 
     # --- Model Specific Parameters ---
     PRETRAINED = False   # For ResNet18CNN & DeepLabV3Plus

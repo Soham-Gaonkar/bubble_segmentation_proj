@@ -23,7 +23,9 @@ class DiceLoss(nn.Module):
 
         # Flatten the tensors
         inputs = inputs.view(-1)
-        targets = targets.view(-1)
+        # targets = targets.view(-1)
+        targets = targets.reshape(-1)
+
 
         # Calculate intersection and union
         intersection = (inputs * targets).sum()

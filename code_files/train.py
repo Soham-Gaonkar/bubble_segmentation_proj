@@ -15,7 +15,8 @@ from model import * # Imports __init__.py which should import all model classes
 from loss import *  # Imports __init__.py which should import all loss classes
 # Import the consolidated metrics function
 from metric import calculate_all_metrics
-from dataloader import train_loader, val_loader
+from dataloader import create_ultrasound_dataloaders
+
 
 # Suppress specific warnings if needed
 warnings.filterwarnings("ignore", message="Mean of empty slice")
@@ -55,31 +56,31 @@ def get_model(config):
         print(f"DeepLabV3+ - Output Stride: {config.DEEPLAB_OUTPUT_STRIDE}, Pretrained: {config.PRETRAINED}")
 
     # --- Temporarily Removed ConvLSTM - uncomment when needed ---
-    # elif model_name == "ConvLSTM":
-    #     # Ensure dataloader.py provides sequential data (B, T, C, H, W)
-    #     # Ensure config.SEQUENCE_LENGTH > 1
-    #     if config.SEQUENCE_LENGTH <= 1:
-    #          raise ValueError("SEQUENCE_LENGTH must be > 1 in config.py to use ConvLSTM.")
-    #
-    #     num_lstm_layers = len(config.CONVLSTM_HIDDEN_DIMS)
-    #     if len(config.CONVLSTM_KERNEL_SIZES) == 1:
-    #         kernel_sizes = config.CONVLSTM_KERNEL_SIZES * num_lstm_layers
-    #         print(f"ConvLSTM - Using kernel size {config.CONVLSTM_KERNEL_SIZES[0]} for all {num_lstm_layers} layers.")
-    #     elif len(config.CONVLSTM_KERNEL_SIZES) == num_lstm_layers:
-    #         kernel_sizes = config.CONVLSTM_KERNEL_SIZES
-    #         print(f"ConvLSTM - Using specific kernel sizes: {kernel_sizes}")
-    #     else:
-    #         raise ValueError("Config error: CONVLSTM_KERNEL_SIZES must have length 1 or match length of CONVLSTM_HIDDEN_DIMS")
-    #
-    #     model = ConvLSTM( # This is ConvLSTMSeq aliased
-    #         in_channels=in_channels,
-    #         hidden_dims=config.CONVLSTM_HIDDEN_DIMS,
-    #         kernel_sizes=kernel_sizes,
-    #         num_classes=num_classes,
-    #         initial_cnn_out_channels=config.CONVLSTM_INITIAL_CNN_OUT_CHANNELS,
-    #         batch_first=config.CONVLSTM_BATCH_FIRST
-    #     )
-    #     print(f"ConvLSTM - Hidden Dims: {config.CONVLSTM_HIDDEN_DIMS}, Initial CNN Out: {config.CONVLSTM_INITIAL_CNN_OUT_CHANNELS}, Batch First: {config.CONVLSTM_BATCH_FIRST}")
+    elif model_name == "ConvLSTM":
+        # Ensure dataloader.py provides sequential data (B, T, C, H, W)
+        # Ensure config.SEQUENCE_LENGTH > 1
+        if config.SEQUENCE_LENGTH <= 1:
+             raise ValueError("SEQUENCE_LENGTH must be > 1 in config.py to use ConvLSTM.")
+    
+        num_lstm_layers = len(config.CONVLSTM_HIDDEN_DIMS)
+        if len(config.CONVLSTM_KERNEL_SIZES) == 1:
+            kernel_sizes = config.CONVLSTM_KERNEL_SIZES * num_lstm_layers
+            print(f"ConvLSTM - Using kernel size {config.CONVLSTM_KERNEL_SIZES[0]} for all {num_lstm_layers} layers.")
+        elif len(config.CONVLSTM_KERNEL_SIZES) == num_lstm_layers:
+            kernel_sizes = config.CONVLSTM_KERNEL_SIZES
+            print(f"ConvLSTM - Using specific kernel sizes: {kernel_sizes}")
+        else:
+            raise ValueError("Config error: CONVLSTM_KERNEL_SIZES must have length 1 or match length of CONVLSTM_HIDDEN_DIMS")
+    
+        model = ConvLSTM( # This is ConvLSTMSeq aliased
+            in_channels=in_channels,
+            hidden_dims=config.CONVLSTM_HIDDEN_DIMS,
+            kernel_sizes=kernel_sizes,
+            num_classes=num_classes,
+            initial_cnn_out_channels=config.CONVLSTM_INITIAL_CNN_OUT_CHANNELS,
+            batch_first=config.CONVLSTM_BATCH_FIRST
+        )
+        print(f"ConvLSTM - Hidden Dims: {config.CONVLSTM_HIDDEN_DIMS}, Initial CNN Out: {config.CONVLSTM_INITIAL_CNN_OUT_CHANNELS}, Batch First: {config.CONVLSTM_BATCH_FIRST}")
 
     else:
         raise ValueError(f"Invalid or unsupported model name in config: '{model_name}'")
@@ -137,10 +138,13 @@ def train_one_epoch(model, optimizer, criterion, train_loader, epoch, config, wr
         if data.ndim != expected_dims:
             print(f"Warning: Epoch {epoch+1}, Batch {batch_idx+1}: Unexpected input data dimension. Got {data.ndim}, expected {expected_dims} for model {config.MODEL_NAME}. Skipping batch.")
             continue
-        if targets.ndim != 4:
-            print(f"Warning: Epoch {epoch+1}, Batch {batch_idx+1}: Unexpected target dimension. Got {targets.ndim}, expected 4. Skipping batch.")
+        expected_target_dims = 4 if config.MODEL_NAME != "ConvLSTM" else 5
+        if targets.ndim != expected_target_dims:
+            print(f"Warning: Epoch {epoch+1}, Batch {batch_idx+1}: Unexpected target dimension. Got {targets.ndim}, expected {expected_target_dims} for model {config.MODEL_NAME}. Skipping batch.")
             continue
         # --- End Shape Check ---
+        if config.MODEL_NAME == "ConvLSTM":
+            targets = targets[:, -1, :, :]
 
         # Forward
         predictions = model(data)
@@ -182,10 +186,15 @@ def validate_one_epoch(model, criterion, val_loader, epoch, config, writer):
             if data.ndim != expected_dims:
                 print(f"Warning: Epoch {epoch+1}, Val Batch {batch_idx+1}: Unexpected input data dimension. Got {data.ndim}, expected {expected_dims} for model {config.MODEL_NAME}. Skipping batch.")
                 continue
-            if targets.ndim != 4:
-                print(f"Warning: Epoch {epoch+1}, Val Batch {batch_idx+1}: Unexpected target dimension. Got {targets.ndim}, expected 4. Skipping batch.")
+            
+            expected_target_dims = 5 if config.MODEL_NAME == "ConvLSTM" else 4
+            if targets.ndim != expected_target_dims:
+                print(f"Warning: Epoch {epoch+1}, Val Batch {batch_idx+1}: Unexpected target dimension. Got {targets.ndim}, expected {expected_target_dims} for model {config.MODEL_NAME}. Skipping batch.")
                 continue
-            # --- End Shape Check ---
+
+            # For ConvLSTM, use only the label of the last time step
+            if config.MODEL_NAME == "ConvLSTM":
+                targets = targets[:, -1, :, :]
 
             # Forward
             predictions = model(data)
@@ -306,6 +315,15 @@ def log_metrics_to_csv(log_path, epoch, config, train_loss, val_loss, metrics_di
 def main():
     config = Config() # Load configuration
 
+    train_loader, val_loader = create_ultrasound_dataloaders(
+    image_dir=config.IMAGE_DIR,
+    label_dir=config.LABEL_DIR,
+    batch_size=config.BATCH_SIZE,
+    image_size=config.IMAGE_SIZE,
+    sequence_length=config.SEQUENCE_LENGTH
+)
+
+
     # --- Setup Directories ---
     experiment_dir = os.path.join(config.LOG_DIR, config.EXPERIMENT_NAME)
     model_ckpt_dir = os.path.join(config.CHECKPOINT_DIR, config.EXPERIMENT_NAME)
@@ -316,6 +334,7 @@ def main():
     csv_log_path = os.path.join(experiment_dir, config.CSV_LOG_FILE)
     print(f"CSV metrics log will be saved to: {csv_log_path}")
 
+    
 
     if not hasattr(config, 'VISUALIZE_EVERY'):
         config.VISUALIZE_EVERY = 5
@@ -328,8 +347,6 @@ def main():
     criterion = get_loss_fn(config)
     optimizer = optim.Adam(model.parameters(), lr=config.LEARNING_RATE, weight_decay=config.WEIGHT_DECAY)
 
-    # --- Create DataLoaders ---
-    # ALready imported directly
 
 
     # --- TensorBoard Writer ---
@@ -437,9 +454,16 @@ def visualize_predictions(model, val_loader, config, epoch, writer, num_samples=
             for i in range(data_vis.shape[0]):
                 if images_shown >= num_samples: break
 
-                img_np = data_vis[i].cpu().squeeze().numpy()
-                label_np = targets[i].cpu().squeeze().numpy()
-                pred_np_binary = outputs_binary[i].cpu().squeeze().numpy()
+                # img_np = data_vis[i].cpu().numpy()
+                # label_np = targets[i].cpu().numpy()
+                # pred_np_binary = outputs_binary[i].cpu().numpy()
+
+
+                img_np = extract_2d_slice(data_vis[i])
+                label_np = extract_2d_slice(targets[i])
+                pred_np_binary = extract_2d_slice(outputs_binary[i])
+
+
 
                 # Plot Image in column 0 of the current row
                 axs[images_shown, 0].imshow(img_np, cmap='gray', vmin=0, vmax=1)
@@ -487,6 +511,13 @@ def visualize_predictions(model, val_loader, config, epoch, writer, num_samples=
         print(f"Error saving or logging visualization: {e}")
     finally:
         plt.close(fig) # Close the figure
+
+
+def extract_2d_slice(tensor):
+    np_img = tensor.cpu().numpy()
+    while np_img.ndim > 2:
+        np_img = np_img[0]
+    return np_img
 
 
 if __name__ == "__main__":

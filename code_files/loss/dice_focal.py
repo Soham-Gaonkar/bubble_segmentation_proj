@@ -19,6 +19,8 @@ class DiceFocalLoss(nn.Module):
         dice = (2 * intersection + self.smooth) / (union + self.smooth)
         dice_loss = 1 - dice.mean()
 
+        targets = targets.reshape(-1)
+
         # Focal Loss
         p_t = targets * inputs + (1 - targets) * (1 - inputs)
         focal_loss = - (1 - p_t) ** self.gamma * torch.log(p_t + self.smooth)

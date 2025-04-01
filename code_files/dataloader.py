@@ -6,74 +6,85 @@ import re
 import numpy as np
 from torchvision import transforms
 from config import Config
+from torchvision import transforms
+
 
 class UltrasoundSegmentationDataset(Dataset):
     """
-    Dataset for ultrasound image segmentation.
-    Pairs ultrasound images with their corresponding segmentation masks.
-    Applies necessary transformations to ensure correct input format.
+    Dataset for both single-frame and sequence-based ultrasound segmentation.
     """
 
-    def __init__(self, image_dir, label_dir, transform=None):
-        """
-        Args:
-            image_dir (str): Directory with all the ultrasound images.
-            label_dir (str): Directory with all the ground truth segmentation masks.
-            transform (callable, optional): Optional transform to be applied on a sample.
-        """
+    def __init__(self, image_dir, label_dir, transform=None, sequence_length=1):
         self.image_dir = image_dir
         self.label_dir = label_dir
-
-        # Get all image filenames
-        self.image_files = sorted([f for f in os.listdir(image_dir) if f.endswith('.jpg')])
-
-        # Extract identifiers from image filenames to match with labels
-        self.image_ids = [self._extract_id(filename) for filename in self.image_files]
-
-        # Find corresponding label files
-        self.label_files = []
-        for img_id in self.image_ids:
-            label_candidates = [f for f in os.listdir(label_dir) if self._extract_id(f) == img_id]
-            if label_candidates:
-                self.label_files.append(label_candidates[0])
-            else:
-                raise ValueError(f"No matching label found for image ID: {img_id}")
-
         self.transform = transform
+        self.sequence_length = sequence_length
+
+        self.image_files = sorted([f for f in os.listdir(image_dir) if f.endswith('.jpg')])
+        self.samples = []
+
+        if self.sequence_length > 1:
+            for i in range(len(self.image_files) - sequence_length + 1):
+                seq_images = self.image_files[i:i + sequence_length]
+                seq_ids = [self._extract_id(f) for f in seq_images]
+                seq_labels = []
+                try:
+                    for img_id in seq_ids:
+                        label = next(f for f in os.listdir(label_dir) if self._extract_id(f) == img_id)
+                        seq_labels.append(label)
+                    self.samples.append((seq_images, seq_labels))
+                except StopIteration:
+                    continue  # Skip incomplete sequence
+        else:
+            for img_file in self.image_files:
+                img_id = self._extract_id(img_file)
+                try:
+                    label = next(f for f in os.listdir(label_dir) if self._extract_id(f) == img_id)
+                    self.samples.append(([img_file], [label]))
+                except StopIteration:
+                    continue
 
     def _extract_id(self, filename):
-        """Extract the unique identifier from a filename."""
-        # Extract the numeric part after the underscore (e.g., '738966_1' from 't3US1_738966_1.jpg')
         match = re.search(r'_(\d+_\d+)', filename)
         if match:
             return match.group(1)
-        else:
-            raise ValueError(f"Cannot extract ID from filename: {filename}")
+        raise ValueError(f"Cannot extract ID from filename: {filename}")
 
     def __len__(self):
-        return len(self.image_files)
+        return len(self.samples)
 
     def __getitem__(self, idx):
-        # Load image
-        img_path = os.path.join(self.image_dir, self.image_files[idx])
-        image = Image.open(img_path).convert('RGB')
+        img_seq_files, lbl_seq_files = self.samples[idx]
+        images, labels = [], []
 
-        # Load label
-        label_path = os.path.join(self.label_dir, self.label_files[idx])
-        label = Image.open(label_path).convert('L')  # 'L' mode for grayscale
+        for img_file, lbl_file in zip(img_seq_files, lbl_seq_files):
+            img = Image.open(os.path.join(self.image_dir, img_file)).convert('RGB')
+            lbl = Image.open(os.path.join(self.label_dir, lbl_file)).convert('L')
 
-        # Apply transformations
-        if self.transform:
-            image, label = self.transform(image, label)
+            if self.transform:
+                img, lbl = self.transform(img, lbl)
 
-        return image, label
+            images.append(img)
+            labels.append(lbl)
+
+        if self.sequence_length > 1:
+            # Convert lists of tensors to a single tensor
+            image_tensor = torch.stack(images, dim=0)  # Shape: (T, C, H, W)
+            label_tensor = torch.stack(labels, dim=0)    # Shape: (T, H, W) if labels are single-channel
+
+            # Optional: If you need to extract multiple overlapping sequences, you can unfold:
+            # For example, if image_tensor originally is (T_total, C, H, W), then:
+            # image_tensor = image_tensor.unfold(0, self.sequence_length, 1)
+            # label_tensor = label_tensor.unfold(0, self.sequence_length, 1)
+            #
+            # Otherwise, if each __getitem__ already returns one sequence, you can just return them.
+            return image_tensor, label_tensor
+        else:
+            return images[0], labels[0]
 
 
 class JointTransform:
-    """
-    Applies transformations to both image and label in a synchronized manner.
-    """
-
+    """Applies transformations to both image and label."""
     def __init__(self, transforms):
         self.transforms = transforms
 
@@ -83,85 +94,53 @@ class JointTransform:
         return image, label
 
 class Resize:
-    """Resize the image and label to the given size."""
-
+    """Resize image and label to target size."""
     def __init__(self, size):
         self.size = size
 
     def __call__(self, image, label):
         image = image.resize(self.size, Image.BILINEAR)
-        label = label.resize(self.size, Image.NEAREST)  # Use NEAREST for masks
+        label = label.resize(self.size, Image.NEAREST)
         return image, label
 
 class PILToTensor:
-    """Convert PIL Images to tensors using torchvision.transforms.ToTensor."""
-
+    """Convert PIL image and mask to torch.Tensor."""
     def __call__(self, image, label):
         image = transforms.ToTensor()(image)
         label = transforms.ToTensor()(label)
         return image, label
 
-
 class Grayscale:
-    """Convert both image and label to grayscale."""
+    """Convert image to grayscale (not label)."""
     def __call__(self, image, label):
         image = image.convert('L')
         return image, label
 
-# Create dataloaders with transformations
-def create_ultrasound_dataloaders(image_dir, label_dir, batch_size=4, val_split=0.2, num_workers=4, image_size=(256, 256)):
+def create_ultrasound_dataloaders(image_dir, label_dir, batch_size=4, val_split=0.2, num_workers=4, image_size=(256, 256), sequence_length=1):
     """
-    Create training and validation dataloaders for ultrasound image segmentation.
-    Applies transformations to ensure correct input format.
-
-    Args:
-        image_dir (str): Directory with all the ultrasound images.
-        label_dir (str): Directory with all the ground truth segmentation masks.
-        batch_size (int): Batch size for the dataloaders.
-        val_split (float): Portion of the dataset to use for validation (0 to 1).
-        num_workers (int): Number of workers for data loading.
-        image_size (tuple): Resize images to this size
-
-    Returns:
-        tuple: (train_loader, val_loader)
+    Create train and val DataLoaders with correct shape depending on model type.
     """
 
-    # Define joint transformations (applied to both image and label)
-    joint_transforms = JointTransform([
-        Resize(image_size),  # Resize both image and label
-    ])
+    joint_transforms = JointTransform([Resize(image_size)])
+    tensor_transforms = JointTransform([Grayscale(), PILToTensor()])
 
-    # Define separate transforms (applied to image and label after joint transforms)
-    train_transform = JointTransform([
-        Grayscale(), #Convert to Grayscale
-        PILToTensor(),  # Convert to tensors
-    ])
-
-    val_transform = JointTransform([
-        Grayscale(), #Convert to Grayscale
-        PILToTensor(),  # Convert to tensors
-    ])
-
-
-    # Create dataset
-    dataset = UltrasoundSegmentationDataset(
+    full_dataset = UltrasoundSegmentationDataset(
         image_dir=image_dir,
         label_dir=label_dir,
+        transform=tensor_transforms,
+        sequence_length=sequence_length
     )
 
-    # Split dataset
-    dataset_size = len(dataset)
-    val_size = int(dataset_size * val_split)
+    dataset_size = len(full_dataset)
+    val_size = int(val_split * dataset_size)
     train_size = dataset_size - val_size
 
-    train_dataset, val_dataset = torch.utils.data.random_split(
-        dataset, [train_size, val_size]
-    )
+    train_dataset, val_dataset = torch.utils.data.random_split(full_dataset, [train_size, val_size])
 
-    train_dataset.dataset.transform = train_transform
-    val_dataset.dataset.transform = val_transform
+    # Set transforms
+    train_dataset.dataset.transform = tensor_transforms
+    val_dataset.dataset.transform = tensor_transforms
 
-    # Create dataloaders
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
@@ -181,25 +160,22 @@ def create_ultrasound_dataloaders(image_dir, label_dir, batch_size=4, val_split=
     return train_loader, val_loader
 
 
-# Path to your image and label directories
-image_dir = "../Data/US_2"
-label_dir = "../Data/Labels_2"
+# --- Hook for train.py ---
+if __name__ == "__main__":
+    image_dir = "../Data/US_2"
+    label_dir = "../Data/Labels_2"
+    from config import Config
 
-# Create dataloaders for batch processing
-train_loader, val_loader = create_ultrasound_dataloaders(
-    image_dir=image_dir,
-    label_dir=label_dir,
-    batch_size=8,
-    image_size=Config.IMAGE_SIZE
-)
+    train_loader, val_loader = create_ultrasound_dataloaders(
+        image_dir=image_dir,
+        label_dir=label_dir,
+        batch_size=Config.BATCH_SIZE,
+        image_size=Config.IMAGE_SIZE,
+        sequence_length=Config.SEQUENCE_LENGTH
+    )
 
-# Access a single sample from train_loader to verify shapes
-images, labels = next(iter(train_loader))
-print(f"Train Images shape: {images.shape}, Train Labels shape: {labels.shape}")
-
-# Access a single sample from val_loader to verify shapes
-images, labels = next(iter(val_loader))
-print(f"Val Images shape: {images.shape}, Val Labels shape: {labels.shape}")
-
-
-print("Dataset created!")
+    images, labels = next(iter(train_loader))
+    print(f"Train - Images: {images.shape}, Labels: {labels.shape}")
+    images, labels = next(iter(val_loader))
+    print(f"Val - Images: {images.shape}, Labels: {labels.shape}")
+    print("Dataloader ready!")
